@@ -23,6 +23,7 @@ int setMode = 0; //0 for hour, 1 for min, 2 for sec
 int timeInput[] = {0, 0, 0, 0};
 bool displayOn = true;
 bool debounce = false;
+int ls = -1;
 
 void setup() {
 
@@ -34,7 +35,7 @@ void setup() {
   strip.show(); // Initialize all pixels to 'off'
 
   setSyncProvider(RTC.get); //get time from the RTC
-  setSyncInterval(10); //sync with RTC every minute
+  setSyncInterval(60); //sync with RTC every x seconds
 
   if(timeStatus() != timeSet){
     for(int i=0; i< strip.numPixels(); i++) {
@@ -61,7 +62,7 @@ void loop(){
       if(timeInput[0] >= 12) timeInput[0] = timeInput[0]-12;
       timeInput[1] = minute();
       timeInput[2] = second();
-      rainbowCycle(1);
+      rainbowCycle(1, 2);
       return;
     }
 
@@ -79,26 +80,29 @@ void loop(){
       int h = hour();
       int m = minute();
       int s = second();
-      
-      if(h >= 9 && h <20) lightIntensity = 1;
-      else if((h >= 20 && h < 22) || (h >= 7 && h < 9)) lightIntensity = 0.5;
-      else lightIntensity = 0.2;
 
-      if(h>=12) h=h-12;
-      int hp = h*5+floor(m/12);
-      int hi = 255;
-      
-      for(int i=0; i< strip.numPixels(); i++) {
-         int r = 0;
-         int g = 0;
-         int b = 0;
-         //if(i>=h*5 && i<=h*5+4) r=255;
-         if(i==hp)r=hi;
-         if(i==m) g=255;
-         if(i==s) b=255;
-         strip.setPixelColor(i, strip.Color(r*lightIntensity, g*lightIntensity, b*lightIntensity));
+      if(ls != s){
+        ls=s;
+        if(h >= 9 && h <20) lightIntensity = 1;
+        else if((h >= 20 && h < 22) || (h >= 7 && h < 9)) lightIntensity = 0.5;
+        else lightIntensity = 0.2;
+  
+        if(h>=12) h=h-12;
+        int hp = h*5+floor(m/12);
+        int hi = 255;
+        
+        for(int i=0; i< strip.numPixels(); i++) {
+           int r = 0;
+           int g = 0;
+           int b = 0;
+           //if(i>=h*5 && i<=h*5+4) r=255;
+           if(i==hp)r=hi;
+           if(i==m) g=255;
+           if(i==s) b=255;
+           strip.setPixelColor(i, strip.Color(r*lightIntensity, g*lightIntensity, b*lightIntensity));
+        }
+        strip.show();
       }
-      strip.show();
     }else{
       for(int i=0; i< strip.numPixels(); i++) {
          strip.setPixelColor(i, strip.Color(0, 0, 0));
@@ -179,10 +183,10 @@ void loop(){
 }
 
 // Slightly different, this makes the rainbow equally distributed throughout
-void rainbowCycle(uint8_t wait) {
+void rainbowCycle(uint8_t wait, int cycles) {
   uint16_t i, j;
 
-  for(j=0; j<256*5; j++) { // 5 cycles of all colors on wheel
+  for(j=0; j<256*cycles; j++) { // 5 cycles of all colors on wheel
     for(i=0; i< strip.numPixels(); i++) {
       strip.setPixelColor(i, Wheel(((i * 256 / strip.numPixels()) + j) & 255));
     }
