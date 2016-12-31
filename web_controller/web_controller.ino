@@ -3,6 +3,11 @@ This program contains code adapted from the NTPClient example
 */
 #include <ESP8266WiFi.h>
 #include <WiFiUdp.h>
+#include <EEPROM.h>
+
+#define ADDRESS_TOFFSET 0
+
+#define HOUR_SECONDS 3600
 
 char ssid[] = "ssid";  //  your network SSID (name)
 char pass[] = "pass";       // your network password
@@ -16,19 +21,36 @@ const char* weatherServerHost = "t3kbau5.com"; //ser the weather server host (le
 //IPAddress weatherServerIP(129, 6, 15, 28); //set weather server ip (uncomment if domain name is blank)
 const char* weatherServerPage = "/stuff/weather.php"; //set the path to the weather script on the above host
 
+WiFiServer server(80);
+
 unsigned int localPort = 2390;      // local port to listen for UDP packets
 const int NTP_PACKET_SIZE = 48; // NTP time stamp is in the first 48 bytes of the message
 byte packetBuffer[ NTP_PACKET_SIZE]; //buffer to hold incoming and outgoing packets
 WiFiUDP udp; // A UDP instance to let us send and receive packets over UDP
+WiFiClient webClient;
+WiFiClient serverClient;
+unsigned long timeout;
+bool wreq = false;
+int timeOffset = 0;
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);
+
+  //WiFi Init
   WiFi.begin(ssid, pass);
 
+  pinMode(2, OUTPUT);
+
+  bool ledOn = false;
+  
   while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
+    ledOn = !ledOn;
+    digitalWrite(2, ledOn);
+    delay(250);
   }
+  digitalWrite(2, 0);
   udp.begin(localPort);
+  server.begin();
   
   if(ntpServerName != ""){
     WiFi.hostByName(ntpServerName, timeServerIP); 
@@ -36,6 +58,12 @@ void setup() {
   if(weatherServerHost != ""){
     WiFi.hostByName(ntpServerName, timeServerIP); 
   }
+
+  //EEPROM Init
+  EEPROM.begin(512);
+  byte b = EEPROM.read(ADDRESS_TOFFSET);
+  timeOffset = b-12;
+  
   Serial.println("READY");
 }
 
@@ -45,6 +73,15 @@ void loop() {
     cmd.trim();
     if(cmd.equalsIgnoreCase("TIME")){
       sendNTPpacket(timeServerIP);
+      Serial.println("OK");
+    }else if(cmd.equalsIgnoreCase("WEATHER")){
+      sendWeatherRequest();
+      Serial.println("OK");
+    }else if(cmd.equalsIgnoreCase("IP")){
+      Serial.print("DEBUG+");
+      Serial.println(WiFi.localIP());
+    }else if(cmd.equalsIgnoreCase("CLEAR")){
+      clearSettings();
       Serial.println("OK");
     }else{
       Serial.println("ICMD+'" + cmd+"'");
@@ -58,7 +95,44 @@ void loop() {
     sprintf(buf, "T+%lu", t);
     Serial.println(buf);
   }
-  
+  if(webClient.available() > 0) {
+    char buf[webClient.available()];
+    for(int i=0;i<webClient.available();i++){
+      buf[i] = webClient.read();
+    }
+    webClient.stop();
+    Serial.print("DEBUG+");
+    Serial.println(buf);
+  }else if(wreq){
+    if (millis() - timeout > 5000) {
+      Serial.println("DEBUG+'Weather Request Timed Out'");
+      webClient.stop();
+    }
+  }
+
+  serverClient = server.available();
+  if(serverClient){
+    String req = serverClient.readStringUntil('\r');
+    Serial.println("DEBUG+'" + req + "'");
+    serverClient.flush();
+    int index = req.indexOf("/config/");
+    if(index != -1){
+      index += 8;
+      if(req.indexOf("?offset=") != -1){
+       index += 8;
+       int endIndex = req.indexOf(' ', index);
+       String val = req.substring(index, endIndex);
+       timeOffset = val.toInt();
+       saveTimeOffset(timeOffset);
+       serverOK(timeOffset);
+       sendNTPpacket(timeServerIP);
+      }else{
+        serverBad();
+      }
+    }else{
+      serverBad();
+    }
+  }
 }
 
 // send an NTP request to the time server at the given address
@@ -100,6 +174,50 @@ unsigned long getUnixTime(){
   const unsigned long seventyYears = 2208988800UL;
   // subtract seventy years:
   unsigned long epoch = secsSince1900 - seventyYears;
+  epoch = epoch + HOUR_SECONDS*timeOffset; //do timezone conversion
   return(epoch);
+}
+
+void sendWeatherRequest(){
+  const int httpPort = 80;
+  if (!webClient.connect(weatherServerHost, httpPort)) {
+    Serial.println("DEBUG+'Weather Connection Failed'");
+    return;
+  }
+  
+  // This will send the request to the server
+  webClient.print(String("GET ") + weatherServerPage + " HTTP/1.1\r\n" +
+               "Host: " + weatherServerHost + "\r\n" + 
+               "Connection: close\r\n\r\n");
+  timeout = millis();
+}
+
+void clearSettings(){
+  for(int i=0; i<512; i++){
+    EEPROM.write(i, 0);
+  }
+  EEPROM.commit();
+}
+
+void saveTimeOffset(int offset){
+  offset = offset+12;
+  EEPROM.write(ADDRESS_TOFFSET, offset);
+  EEPROM.commit();
+}
+
+void serverOK(int val){
+  String s = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n<!DOCTYPE HTML>\r\n<html>\r\nValue set! val: ";
+  s += val;
+  s += "</html>\n";
+
+  serverClient.print(s);
+  serverClient.stop();
+}
+
+void serverBad(){
+  String s = "HTTP/1.1 400 BAD REQUEST\r\nContent-Type: text/html\r\n\r\n<!DOCTYPE HTML>\r\n<html>\r\nInvalid Request. Please check your syntax and try again.</html>\n";
+
+  serverClient.print(s);
+  serverClient.stop();
 }
 
